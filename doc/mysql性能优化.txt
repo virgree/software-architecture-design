@@ -1,0 +1,634 @@
+MySQL架构是一个客户端-服务器系统。
+
+MySQL主要包括以下几部分:
+
+Server层：主要包括连接器、查询缓存、分析器、优化器、执行器等，所有跨存储引擎的功能都在这一
+层实现，比如存储过程、触发器、视图，函数等，还有一个通用的日志模块 binglog 日志模块。
+
+存储引擎： 主要负责数据的存储和读取，采用可以替换的插件式架构，支持 InnoDB、MyISAM、
+Memory 等多个存储引擎，其中 InnoDB 引擎有自己的日志模块 redolog 模块。现在最常用的存储引擎
+是 InnoDB，它从 MySQL 5.5.5 版本开始就被当做默认存储引擎了
+
+连接器： 身份认证和权限相关(登录 MySQL 的时候)。
+
+查询缓存: 执行查询语句的时候，会先查询缓存（MySQL 8.0 版本后移除，因为这个功能不太实用）
+mysql的server层增加一层缓存模块，类似一个内存的kv层，k是sql，value是结果
+
+分析器: 没有命中缓存的话，SQL 语句就会经过分析器，分析器说白了就是要先看你的 SQL 语句要干
+嘛，再检查你的 SQL 语句语法是否正确。
+
+优化器： 按照 MySQL 认为最优的方案去执行。
+
+执行器: 执行语句，然后从存储引擎返回数据。
+
+和大多数的数据库不同, MySQL中有一个存储引擎的概念
+针对不同的存储需求可以选择最优的存储引擎。
+存储引擎就是存储数据，建立索引，更新查询数据等等技术的实现方式 。
+存储引擎是基于表的，而不是基于库的
+所以存储引擎也可被称为表类型
+
+MySQL提供了插件式的存储引擎架构，存在多种存储引擎，可以按需要使用相应引擎，或
+者编写存储引擎。
+MySQL5.0支持的存储引擎包含 ： InnoDB 、MyISAM 、BDB、MEMORY、MERGE、EXAMPLE、
+NDB Cluster、ARCHIVE、CSV、BLACKHOLE、FEDERATED等
+可以通过指定 show engines ， 来查询当前数据库支持的存储引擎
+
+-- 表含义:
+- support : 指服务器是否支持该存储引擎
+- transactions : 指存储引擎是否支持事务
+- XA : 指存储引擎是否支持分布式事务处理
+- Savepoints : 指存储引擎是否支持保存点
+
+命令查看引擎配置
+
+SHOW VARIABLES LIKE '%storage_engine%'
+
+如何更改数据库引擎？
+建表语句后面加入引擎赋值即可 ,命令举例如下
+CREATE TABLE t1(
+id INT ,
+name VARCHAR(20)
+) ENGINE = MyISAM;
+
+修改已有的表引擎 , 命令举例如下
+ALTER TABLE t1 ENGINE = InnoDB;
+
+常见的存储引擎 :
+MyISAM存储引擎 : 访问快,不支持事务和外键。表结构保存在.frm文件中，表数据保存在.MYD文
+件中，索引保存在.MYI文件中。
+
+innoDB存储引擎(5.5版本开始默认) : 支持事务 ,占用磁盘空间大 ,支持并发控制。表结构保存
+在.frm文件中，如果是共享表空间，数据和索引保存在 innodb_data_home_dir 和
+innodb_data_file_path定义的表空间中，可以是多个文件。如果是多表空间存储，每个表的数据和
+索引单独保存在 .ibd 中。
+
+
+SQL的执行流程：
+客户端发送一条查询给服务器。
+服务器先检查查询缓存，如果命中了缓存，则立刻返回存储在缓存中的结果。否则进入下一阶段。
+服务器端进行SQL解析、预处理，再由优化器生成对应的执行计划。
+MySQL根据优化器生成的执行计划，再调用存储引擎的API来执行查询。
+将结果返回给客户端
+
+MySQL服务器硬件优化：
+影响数据库最大的性能问题就是磁盘I/O
+为提高数据库的IOPS性能，可使用SSD或PCIE-SSD高速磁盘设备
+
+磁盘IO的优化
+可以用RAID来进行优化
+常用RAID级别：
+RAID0：也称为条带，就是把多个磁盘链接成一个硬盘使用，这个级别IO最好
+RAID1：也称为镜像，要求至少有两个磁盘，每组磁盘存储的数据相同
+RAID5：也是把多个（最少3个）硬盘合并成一个逻辑盘使用，数据读写时会建立奇偶校验信息，并且
+奇偶校验信息和相对应的数据分别存储在不同的磁盘上。当RAID5的一个磁盘数据发生损坏后，利用剩
+下的数据和响应的奇偶校验信息去恢复被损坏的数据
+RAID1+0（建议使用）：就是RAID0和RAID1的组合。同时具备两个级别的优缺点，一般建议数据库使
+用这个级别。
+
+=====================================================================================================
+MySQL数据库配置优化
+
+表示缓冲池字节大小。
+innodb_buffer_pool_size = 推荐值为物理内存的50%~80%。
+数据缓存、索引缓存、缓存页、内部结构，大的缓冲池可以减少磁盘IO次数
+
+用来控制redo log刷新到磁盘的策略。
+	innodb_flush_log_at_trx_commit=1
+	select @@innodb_flush_log_at_trx_commit;
+	0 : 提交事务的时候，不立即把 redo log buffer 里的数据刷入磁盘文件中，而是依靠 InnoDB
+	的主线程每秒执行一次刷新到磁盘。此时可能你提交事务了，结果 mysql 宕机了，然后此时内存里的数
+	据全部丢失。
+	1 : 提交事务的时候，立即把 redo log buffer 里的数据刷入磁盘文件中，只要事务提交成功，那
+	么数据就必然在磁盘里了。
+	2 : 提交事务的时候，把 redo log buffer日志写入磁盘文件对应的系统缓存，而不是直接进入磁盘
+	文件，这时可能1秒后才会把系统缓存里的数据写入到磁盘文件。
+
+每提交1次事务就同步写到磁盘中，可以设置为1。
+	sync_binlog=1
+	0：默认值。事务提交后，将二进制日志从缓冲写入磁盘，但是不进行刷新操作（fsync()），此时只是
+	写入了操作系统缓冲，若操作系统宕机则会丢失部分二进制日志。
+	1：事务提交后，将二进制文件写入磁盘并立即执行刷新操作，相当于是同步写入磁盘，不经过操作系统
+	的缓存。
+	N：每写N次操作系统缓冲就执行一次刷新操作。
+	
+脏页占innodb_buffer_pool_size的比例，触发刷脏页到磁盘。 推荐值为25%~50%。
+	innodb_max_dirty_pages_pct=30
+	脏页：内存数据页和磁盘数据页上的内容不一致
+	
+后台进程最大IO性能指标。
+	默认200，如果SSD，调整为5000~20000
+	PCIE-SSD可调整为5w左右
+	默认：innodb_io_capacity=200
+
+指定innodb共享表空间文件的大小。
+	innodb_data_file_path ＝ ibdata:1G:autoextend：默认10M，
+	一般设置为1GB
+
+慢查询日志的阈值设置，单位秒。
+	long_query_time=0.3
+	合理设置区间0.1s~0.5s，
+
+mysql复制的形式，row为MySQL8.0的默认形式。
+	binlog_format=row
+	建议binlog的记录格式为row模式
+	STATEMENT模式：每一条会修改数据的sql语句都会记录到binlog中。
+	ROW模式：不记录每条sql语句的上下文信息，仅需记录哪条数据被修改了，修改成什么样了。
+	MIXED模式：以上两种模式的混合使用。
+
+调高该参数则应降低interactive_timeout、wait_timeout的值。
+交互等待时间和非交互等待时间，值一致，建议300~500s，默认8小时
+	在用mysql客户端对数据库进行操作时，打开终端窗口，如果一段时间没有操作，再次操作时，会报错：
+	当前的连接已经断开，需要重新建立连接
+
+数据库最大连接数max_connections=200
+
+
+过大，实例恢复时间长；过小，造成日志切换频繁。
+innodb_log_file_size=默认
+redo log空间大小
+
+全量日志建议关闭。
+默认关闭general_log=0
+
+开启 general log 将所有到达MySQL Server的SQL语句记录下来，general_Log文件就会产生很
+大的文件，建议关闭
+
+=======================================================================================================
+Mysql中查询缓存优化
+在MySQL 8.0之后废弃这个功能 复杂、实用性不高
+
+
+查询缓存：
+	开启Mysql的查询缓存，当执行完全相同的SQL语句的时候，服务器就会直接从缓存中读取结果，当数据
+	被修改，之前的缓存会失效，修改比较频繁的表不适合做查询缓存。
+	
+查询缓存配置
+1. 查看当前的MySQL数据库是否支持查询缓存：
+	SHOW VARIABLES LIKE 'have_query_cache';
+2. 查看当前MySQL是否开启了查询缓存 ：
+	SHOW VARIABLES LIKE 'query_cache_type';
+3. 查看查询缓存的占用大小 ：
+	SHOW VARIABLES LIKE 'query_cache_size';
+4. 查看查询缓存的状态变量：
+	SHOW STATUS LIKE 'Qcache%';
+	各个变量的含义如下：
+		Qcache_free_blocks 查询缓存中的可用内存块数
+		Qcache_free_memory 查询缓存的可用内存量
+		Qcache_hits 查询缓存命中数
+		Qcache_inserts 添加到查询缓存的查询数
+		Qcache_lowmen_prunes 由于内存不足而从查询缓存中删除的查询数
+		Qcache_not_cached 非缓存查询的数量（由于 query_cache_type 设置而无法缓存
+		或未缓存）
+		Qcache_queries_in_cache 查询缓存中注册的查询数
+		Qcache_total_blocks 查询缓存中的块总数
+开启查询缓存
+	MySQL的查询缓存默认是关闭的，需要手动配置参数 query_cache_type ， 来开启查询缓存。
+	query_cache_type 该参数的可取值有三个 ：
+		OFF 或 0： 查询缓存功能关闭
+		ON 或 1： 查询缓存功能打开，SELECT的结果符合缓存条件即会缓存，否则，不予缓存，显式
+		指定 SQL_NO_CACHE，不予缓存
+		DEMAND 或 2 ：查询缓存功能按需进行，显式指定 SQL_CACHE 的SELECT语句才会缓存；其它均不
+		予缓存
+	在 my.cnf 配置中，增加以下配置 ：query_cache_type=1
+	
+查询缓存SELECT选项 很少用
+	可以在SELECT语句中指定两个与查询缓存相关的选项 ：
+SQL_CACHE : 如果查询结果是可缓存的，并且 query_cache_type 系统变量的值为ON或 DEMAND ，则
+缓存查询结果 。
+SQL_NO_CACHE : 服务器不使用查询缓存。它既不检查查询缓存，也不检查结果是否已缓存，也不缓存
+查询结果。
+例子：SELECT SQL_CACHE id, name FROM xxx;
+	  SELECT SQL_NO_CACHE id, name FROM xxx;
+	  
+查询缓存失效的情况
+	1） SQL 语句不一致的情况， 要想命中查询缓存，查询的SQL语句必须一致。
+	2） 当查询语句中有一些不确定的值，则不会缓存。如 ： now() , current_date() , curdate() , curtime()
+, rand() , uuid() , user() , database() 。
+	3） 不使用任何表查询语句。
+		SELECT SQL_CACHE id, name FROM xxx;
+		SELECT SQL_NO_CACHE id, name FROM xxx;
+		SQL1 : select count(*) from xxx;
+		SQL2 : Select count(*) from xxx;
+		SQL1 : select * from xxx where updatetime < now() limit 1;
+		SQL2 : select user();
+		SQL3 : select database();
+	4） 查询 mysql， information_schema或 performance_schema 数据库中的表时，不会走查询缓
+存。
+	5） 在存储的函数，触发器或事件的主体内执行的查询。
+	6） 如果表更改，则使用该表的所有高速缓存查询都将变为无效并从高速缓存中删除。这包括使用
+	MERGE 映射到已更改表的表的查询。一个表可以被许多类型的语句，如被改变 INSERT， UPDATE，
+	DELETE， TRUNCATE TABLE， ALTER TABLE， DROP TABLE，或 DROP DATABASE 。
+	
+=================================================================================================
+Mysql内存管理及优化
+	内存优化原则
+		1） 将尽量多的内存分配给MySQL做缓存，但要给操作系统和其他程序预留足够内存。
+		2） MyISAM 存储引擎的数据文件读取依赖于操作系统自身的IO缓存，因此，如果有MyISAM表，就要
+		预留更多的内存给操作系统做IO缓存。
+		3） 排序区、连接区等缓存是分配给每个数据库会话（session）专用的，其默认值的设置要根据最大连
+		接数合理分配，如果设置太大，不但浪费资源，而且在并发连接较高时会导致物理内存耗尽。
+	
+	MyISAM 内存优化
+		MyISAM 存储引擎使用 key_buffer 缓存索引块，加速myisam索引的读写速度。对于myisam表的数据
+		块，mysql没有特别的缓存机制，完全依赖于操作系统的IO缓存
+		key_buffer_size
+			key_buffer_size决定MyISAM索引块缓存区的大小，直接影响到MyISAM表的存取效率。可以在MySQL
+			参数文件中设置key_buffer_size的值，对于一般MyISAM数据库，建议至少将1/4可用内存分配给
+			key_buffer_size。
+			在my.cnf 中做如下配置：
+				key_buffer_size=512M
+		read_buffer_size
+			如果需要经常顺序扫描MyISAM 表，可以通过增大read_buffer_size的值来改善性能。但需要注意的是
+			read_buffer_size是每个session独占的，如果默认值设置太大，就会造成内存浪费。
+		read_rnd_buffer_size
+			对于需要做排序的MyISAM 表的查询，如带有order by子句的sql，适当增加 read_rnd_buffer_size 的
+		值，可以改善此类的sql性能。但需要注意的是 read_rnd_buffer_size 是每个session独占的，如果默认值设置太大，就会造成内存浪
+	费。
+	
+	InnoDB 内存优化 
+		innodb用一块内存区做IO缓存池，该缓存池不仅用来缓存innodb的索引块，而且也用来缓存innodb的
+数据块。
+		innodb_buffer_pool_size
+			该变量决定了 innodb 存储引擎表数据和索引数据的最大缓存区大小。在保证操作系统及其他程序有足
+			够内存可用的情况下，innodb_buffer_pool_size 的值越大，缓存命中率越高，访问InnoDB表需要的磁
+			盘I/O 就越少，性能也就越高。
+			innodb_buffer_pool_size=512M
+		innodb_log_buffer_size
+			决定了innodb重做日志缓存的大小，对于可能产生大量更新记录的大事务，增加
+			innodb_log_buffer_size的大小，可以避免innodb在事务提交前就执行不必要的日志写入磁盘操作。
+			innodb_log_buffer_size=10M
+	
+	Mysql并发参数调整
+	从实现上来说，MySQL Server 是多线程结构，包括后台线程和客户服务线程。多线程可以有效利用服
+务器资源，提高数据库的并发性能。在Mysql中，控制并发连接和线程的主要参数包括
+max_connections、back_log、thread_cache_size、table_open_cahce。
+		max_connections 最大可支持的连接数
+			采用max_connections 控制允许连接到MySQL数据库的最大数量，默认值是 151。如果状态变量
+			connection_errors_max_connections 不为零，并且一直增长，则说明不断有连接请求因数据库连接数
+			已达到允许最大值而失败，这时可以考虑增大max_connections 的值。
+			Mysql 最大可支持的连接数，取决于很多因素，包括给定操作系统平台的线程库的质量、内存大小、每
+			个连接的负荷、CPU的处理速度，期望的响应时间等。在Linux 平台下，性能好的服务器，支持 500-
+			1000 个连接不是难事，需要根据服务器性能进行评估设定。
+		back_log
+			积压请求栈大小
+			back_log 参数控制MySQL监听TCP端口时设置的积压请求栈大小。如果MySql的连接数达到
+			max_connections时，新来的请求将会被存在堆栈中，以等待某一连接释放资源，该堆栈的数量即
+			back_log，如果等待连接的数量超过back_log，将不被授予连接资源，将会报错。5.6.6 版本之前默认值
+			为 50 ， 之后的版本默认为 50 + （max_connections / 5）， 但最大不超过900。
+			如果需要数据库在较短的时间内处理大量连接请求， 可以考虑适当增大back_log 的值。
+		table_open_cache
+			执行线程可打开表缓存个数
+			该参数用来控制所有SQL语句执行线程可打开表缓存的数量， 而在执行SQL语句时，每一个SQL执行线
+			程至少要打开 1 个表缓存。该参数的值应该根据设置的最大连接数 max_connections 以及每个连接执
+			行关联查询中涉及的表的最大数量来设定 ：
+			max_connections x N ；
+		thread_cache_size
+			缓存客户服务线程的数量
+			为了加快连接数据库的速度，MySQL 会缓存一定数量的客户服务线程以备重用，通过参数
+			thread_cache_size 可控制 MySQL 缓存客户服务线程的数量。
+		lock_wait_timeout
+			innodb_lock_wait_timeout
+			事务等待行锁的时间
+			该参数是用来设置InnoDB 事务等待行锁的时间，默认值是50ms ， 可以根据需要进行动态设置。对于
+			需要快速反馈的业务系统来说，可以将行锁的等待时间调小，以避免事务长时间挂起； 对于后台运行的
+			批量处理程序来说， 可以将行锁的等待时间调大， 以避免发生大的回滚操作。
+			
+=======================================================================================================
+常用慢查询分析工具
+对慢查询 SQL 进行分析和优化很重要
+其中 mysqldumpslow 是 MySQL 服务自带的一款很好的分析调优工具
+MySQL提供的一种慢查询日志记录，用来记录在MySQL查询中响应时间超过阀值的记录
+具体指运行时间超过long_query_time值的SQL，则会被记录到慢查询日志中
+	show variables like '%slow_query_log%';
+		slow_query_log //是否开启，默认关闭，建议调优时才开启
+		slow_query_log_file //慢查询日志存放目录
+	开启命令临时
+		set global slow_query_log =1; //只对当前会话生效，重启失效
+	配置文件开启
+		vim my.cnf
+		在[mysqld]下添加：
+		slow_query_log = 1
+		slow_query_log_file = /opt/mysql-5.7.28/data/linux-141-slow.log
+		重启MySQL服务
+	哪些 SQL 会记录到慢查询日志？
+	-- 查看阀值（大于），默认10s
+		show variables like 'long_query_time%';
+	如何设置查询阀值？
+		set global long_query_time = 3
+		备注：另外开一个session或重新连接 才会看到变化
+		配置文件设置：
+			vim my.cnf
+			在[mysqld]下添加：
+			long_query_time = 3
+			log_output = FILE
+			重启MySQL服务
+	如何把未使用索引的 SQL 记录写入慢查询日志？
+		-- 查看设置，默认关闭
+		show variables like 'log_queries_not_using_indexes';
+		开启配置
+			set global log_queries_not_using_indexes = on;
+	如何查看慢查询条数？
+		show global status like '%Slow_queries%';
+调优工具常用命令
+	语法格式 mysqldumpslow [ OPTS... ] [ LOGS... ] //命令行格式
+	常用到的格式组合
+		-s 表示按照何种方式排序
+			c 访问次数
+			l 锁定时间
+			r 返回记录
+			t 查询时间
+			al 平均锁定时间
+			ar 平均返回记录数
+			at 平均查询时间
+		-t 返回前面多少条数据
+		-g 后边搭配一个正则匹配模式，大小写不敏感
+	1、拿到慢日志路径
+		日志路径为：/opt/mysql-5.7.28/data/linux-141-slow.log
+		查看日志：cat /opt/mysql-5.7.28/data/linux-141-slow.log
+	2、得到访问次数最多的10条SQL
+		yum -y install perl perl-devel
+		./bin/mysqldumpslow -s r -t 10 /opt/mysql-5.7.28/data/linux-141-slow.log
+	3、按照时间排序的前10条里面含有左连接的SQL
+		./bin/mysqldumpslow -s t -t 10 -g "left join" /opt/mysql-5.7.28/data/linux-141-slow.log
+
+	4、慢日志文件分析 cat /opt/mysql-5.7.28/data/linux-141-slow.log
+		-- 执行SQL时间
+		# Time: 2019-12-31T05:54:23.893042Z
+		-- 执行SQL的主机信息
+		# User@Host: root[root] @ localhost [] Id: 40
+		-- SQL的执行信息
+		# Query_time: 4.013664 Lock_time: 0.000000 Rows_sent: 1 Rows_examined: 1
+		-- SQL执行时间
+		SET timestamp=1577771659;
+		-- SQL内容
+		
+调优工具show profile
+简介：
+	show profile是MySQL服务自带更高级的分析调优工具
+	比较接近底层硬件参数的调优
+1、查看show profile设置
+	-- 默认关闭，保存近15次的运行结果
+	show variables like 'profiling%';
+2.开启：SET profiling = ON;
+3、查看最近15次的运行结果
+	show profiles;
+	-- 可以显示警告和报错的信息
+	show warnings;
+4、诊断运行的SQL
+	接下来，我们一起诊断一下query id为23的慢查询
+	-- 语法
+	SHOW PROFILE cpu,block io FOR QUERY query id
+	-- 示例
+	SHOW PROFILE cpu,block io FOR QUERY 209
+	解释：
+		通过Status一列，可以看到整条SQL的运行过程
+		1. starting //开始
+		2. checking permissions //检查权限
+		3. Opening tables //打开数据表
+		4. init //初始化
+		5. System lock //锁机制
+		6. optimizing //优化器
+		7. statistics //分析语法树
+		8. prepareing //预准备
+		9. executing //引擎执行开始
+		10. end //引擎执行结束
+		11. query end //查询结束
+		12. closing tables //释放数据表
+		13. freeing items //释放内存
+		14. cleaning up //彻底清理
+	查看类型选项
+	SHOW PROFILE...后面的列，即：SHOW PROFILE ALL, BLOCK IO, ... FOR QUERY 209;
+	ALL //显示索引的开销信息
+	BLOCK IO //显示块IO相关开销
+	CONTEXT SWITCHES //上下文切换相关开销
+	CPU //显示CPU相关开销信息
+	IPC //显示发送和接收相关开销信息
+	MEMORY //显示内存相关开销信息
+	PAGE FAULTS //显示页面错误相关开销信息
+	SOURCE //显示和source_function,source_file,source_line相关的开销信息
+	SWAPS //显示交换次数相关开销的信息
+重要提示
+	如出现以下一种或者几种情况，说明SQL执行性能极其低下，亟需优化
+	* converting HEAP to MyISAM //查询结果太大，内存都不够用了往磁盘上搬了
+	* Creating tmp table //创建临时表：拷贝数据到临时表，用完再删
+	* Copying to tmp table on disk //把内存中临时表复制到磁盘，危险
+	* locked //出现死锁
+
+=================================================================================
+如何定位不合理的SQL?
+
+在应用的开发过程中，由于初期数据量小，开发人员写 SQL 语句时更重视功能上的实现，但是当应用系统正
+式上线后，随着生产数据量的急剧增长，很多 SQL 语句开始逐渐显露出性能问题，对生产的影响也越来越
+大，此时这些有问题的 SQL 语句就成为整个系统性能的瓶颈，因此我们必须要对它们进行优化，本章将详细
+介绍在 MySQL 中优化 SQL 语句的方法。
+当面对一个有 SQL 性能问题的数据库时，我们应该从何处入手来进行系统的分析，使得能够尽快定位问题
+SQL 并尽快解决问题。
+	如何查看SQL执行频率?
+		MySQL 客户端连接成功后，通过show [session|global] status
+		命令可以提供服务器状态信息。show [session|global] status 可以根据需要加上参数“session”或者
+			“global”来显示 session 级（当前连接）的统计结果和 global 级（自数据库上次启动至今）的统计结
+			果。
+			如果不写，默认使用参数是“session”。
+			下面的命令显示了当前 session 中所有统计参数的值：
+			show status like 'Com_______';
+			show status like 'Innodb_rows_%';
+			Com_xxx 表示每个 xxx 语句执行的次数，我们通常比较关心的是以下几个统计参数。
+				参数 含义
+				Com_select 执行 select 操作的次数，一次查询只累加 1。
+				Com_insert
+				执行 INSERT 操作的次数，对于批量插入的 INSERT 操作，只累加一
+				次。
+				Com_update 执行 UPDATE 操作的次数。
+				Com_delete 执行 DELETE 操作的次数。
+				Innodb_rows_read select 查询返回的行数。
+				Innodb_rows_inserted 执行 INSERT 操作插入的行数。
+				Innodb_rows_updated 执行 UPDATE 操作更新的行数。
+				Innodb_rows_deleted 执行 DELETE 操作删除的行数。
+				Connections 试图连接 MySQL 服务器的次数。
+				Uptime 服务器工作时间。
+				Slow_queries 慢查询的次数。
+				Com_xxx 表示每个 xxx 语句执行的次数，我们通常比较关心的是以下几个统计参数。
+				Com_*** : 这些参数对于所有存储引擎的表操作都会进行累计。
+				Innodb_*** : 这几个参数只是针对InnoDB 存储引擎的，累加的算法也略有不同。
+
+	如何定位低效率SQL?
+		以下两种方式
+			慢查询日志（重要） : 通过慢查询日志定位那些执行效率较低的 SQL 语句，用--log-slowqueries[=file_name]选项启动时，mysqld 写一个包含所有执行时间超过 long_query_time 秒的
+				SQL 语句的日志文件。
+			show processlist （重要） :
+				慢查询日志在查询结束以后才记录，所以在应用反映执行效率出现问题的时候查询慢查询日志并不能定位问题。
+				可以使用show processlist命令查看当前MySQL在进行的线程，包括线程的状态、是否锁表等，可
+				以实时地查看 SQL 的执行情况，同时对一些锁表操作进行优化。
+				属性字段解释
+					1） id列，用户登录mysql时，系统分配的"connection_id"，可以使用函数connection_id()查看
+					2） user列，显示当前用户。如果不是root，这个命令就只显示用户权限范围的sql语句
+					3） host列，显示这个语句是从哪个ip的哪个端口上发的，可以用来跟踪出现问题语句的用户
+					4） db列，显示这个进程目前连接的是哪个数据库
+					5） command列，显示当前连接的执行的命令，一般取值为休眠（sleep），查询（query），连接
+					（connect）等
+					6） time列，显示这个状态持续的时间，单位是秒
+					7） state列，显示使用当前连接的sql语句的状态，很重要的列。state描述的是语句执行中的某一个状
+					态。一个sql语句，以查询为例，可能需要经过copying to tmp table、sorting result、sending
+					data等状态才可以完成
+					8） info列，显示这个sql语句，是判断问题语句的一个重要依据
+		
+	使用explain分析执行计划
+		
+		字段 含义
+		id select查询的序列号，是一组数字，表示的是查询中执行select子句或者是操作
+		表的顺序。
+		select_type
+		表示 SELECT 的类型，常见的取值有 SIMPLE（简单表，即不使用表连接或者子
+		查询）、PRIMARY（主查询，即外层的查询）、UNION（UNION 中的第二个
+		或者后面的查询语句）、SUBQUERY（子查询中的第一个 SELECT）等
+		table 输出结果集的表
+		type
+		表示表的连接类型，性能由好到差的连接类型为( system ---> const ----->
+		eq_ref ------> ref -------> ref_or_null----> index_merge ---> index_subquery ----
+		-> range -----> index ------> all )
+		possible_keys 表示查询时，可能使用的索引
+		key 表示实际使用的索引
+		key_len 索引字段的长度
+		rows 扫描行的数量
+		extra 执行情况的说明和描述
+	explain 之 id
+		id 字段是 select查询的序列号，是一组数字，表示的是查询中执行select子句或者是操作表的顺序。
+id 情况有三种 ：
+		1） id 相同表示加载表的顺序是从上到下。
+		2） id 不同id值越大，优先级越高，越先被执行。
+		3） id 有相同，也有不同，同时存在。id相同的可以认为是一组，从上往下顺序执行；在所有的组中，
+id的值越大，优先级越高，越先执行。
+
+	explain 之 select_type
+	select_type 含义
+		SIMPLE 简单的select查询，查询中不包含子查询或者UNION
+		PRIMARY 查询中若包含任何复杂的子查询，最外层查询标记为该标识
+		SUBQUERY 在SELECT 或 WHERE 列表中包含了子查询
+		DERIVED
+		在FROM 列表中包含的子查询，被标记为 DERIVED（衍生） MYSQL会递归执行
+		这些子查询，把结果放在临时表中
+		UNION
+		若第二个SELECT出现在UNION之后，则标记为UNION ； 若UNION包含在FROM
+		子句的子查询中，外层SELECT将被标记为 ： DERIVED
+		UNION
+		RESULT
+		从UNION表获取结果的SELECT
+	explain 之 table
+		展示这一行的数据是关于哪一张表的
+	explain 之 type
+		type 显示的是访问类型，是较为重要的一个指标，可取值为：
+		type 含义
+			NULL MySQL不访问任何表，索引，直接返回结果
+			system 表只有一行记录(等于系统表)，这是const类型的特例，一般不会出现
+			const
+			表示通过索引一次就找到了，const 用于比较primary key 或者 unique 索引。因为只
+			匹配一行数据，所以很快。如将主键置于where列表中，MySQL 就能将该查询转换为
+			一个常量。const会将 "主键" 或 "唯一" 索引的所有部分与常量值进行比较
+			eq_ref 类似ref，区别在于使用的是唯一索引，使用主键的关联查询，关联查询出的记录只有
+			一条。常见于主键或唯一索引扫描
+			ref 非唯一性索引扫描，返回匹配某个单独值的所有行。本质上也是一种索引访问，返回所
+			有匹配某个单独值的所有行（多个）
+			range
+			只检索给定返回的行，使用一个索引来选择行。 where 之后出现 between ， < , > , in
+			等操作。
+			index index 与 ALL的区别为 index 类型只是遍历了索引树， 通常比ALL 快， ALL 是遍历数
+			据文件。
+			all 将遍历全表以找到匹配的行
+				结果值从最好到最坏依次是：NULL > system > const > eq_ref > ref > fulltext > ref_or_null > index_merge >
+			unique_subquery > index_subquery > range > index > ALL
+			system > const > eq_ref > ref > range > index > ALL
+	explain 之 key
+			 possible_keys : 显示可能应用在这张表的索引， 一个或多个。
+			 key ： 实际使用的索引， 如果为NULL， 则没有使用索引。
+			 key_len : 表示索引中使用的字节数。len=3*n+2（n为索引字段的长度）
+	         EXPLAIN select username from t_user where username = 'itcast';
+			 select 45 * 3 + 2;
+	explain 之 rows :扫描行的数量。
+	
+	explain 之 extra:其他的额外的执行计划信息，在该列展示 。
+	extra 含义
+		using filesort
+			说明mysql会对数据使用一个外部的索引排序，而不是按照表内的索引顺序进行读
+			取， 称为 “文件排序”, 效率低。-- EXPLAIN select * from t_user u order by
+			u.name desc;
+		using temporary
+			使用了临时表保存中间结果，MySQL在对查询结果排序时使用临时表。常见于
+			order by 和 group by； 效率低
+		using index
+			表示相应的select操作使用了覆盖索引， 避免访问表的数据行， 效率不错。--
+			EXPLAIN select u.username from t_user u order by u.username desc;
+===============================================================================================
+
+如何合理使用索引加速?
+	索引是数据库优化最常用也是最重要的手段之一, 通过索引通常可以帮助用户解决大多数的MySQL的性
+	能优化问题
+	避免索引失效?
+		1) 全值匹配
+			对索引中所有列都指定具体值
+		2) 最左前缀法则
+			如果索引了多列，要遵守最左前缀法则。指的是查询从索引的最左前列开始，并且不跳过索引中的列。
+			匹配最左前缀法则，走索引：违反最左前缀法则 ， 索引失效：如果符合最左法则，但是出现跳跃某一列，只有最左列索引生效：
+		3) 范围查询右边的列 不走索引
+		4）禁止列运算 索引失效
+		5）字符串不加单引号 索引失效
+		6）尽量使用覆盖索引 避免select *尽量使用覆盖索引（只访问索引的查询（索引列完全包含查询列）），减少select * 。
+		7）合理使用or条件 用or分割开的条件， 如果or前的条件中的列有索引，而后面的列中没有索引，那么涉及的索引都不会被用到
+		8）合理使用like查询 以%开头的Like模糊查询，索引失效。如果仅仅是尾部模糊匹配，索引不会失效。如果是头部模糊匹配，索引失效。
+		9）合理评估索引执行 如果MySQL评估使用索引比全表更慢，则不使用索引。
+		10） is NULL和 is NOT NULL 有时索引失效。给定默认值
+		11）in 走索引， not in 索引失效。
+		12）单列索引和复合索引 尽量使用复合索引，而少使用单列索引 。
+	查看索引使用情况
+		show status like 'Handler_read%';
+		show global status like 'Handler_read%';
+			Handler_read_first：索引中第一条被读的次数。如果较高，表示服务器正执行大量全索引扫描（这个值
+			越低越好）。
+			Handler_read_key：如果索引正在工作，这个值代表一个行被索引值读的次数，如果值越低，表示索引得到
+			的性能改善不高，因为索引不经常使用（这个值越高越好）。
+			Handler_read_next ：按照键顺序读下一行的请求数。如果你用范围约束或如果执行索引扫描来查询索引
+			列，该值增加。
+			Handler_read_prev：按照键顺序读前一行的请求数。该读方法主要用于优化ORDER BY ... DESC。
+			Handler_read_rnd ：根据固定位置读一行的请求数。如果你正执行大量查询并需要对结果进行排序该值较
+			高。你可能使用了大量需要MySQL扫描整个表的查询或你的连接没有正确使用键。这个值较高，意味着运行效
+			率低，应该建立索引来补救。
+			Handler_read_rnd_next：在数据文件中读下一行的请求数。如果你正进行大量的表扫描，该值较高。通常
+			说明你的表索引不正确或写入的查询没有利用索引。
+===============================================================================================================
+SQL优化的一些建议
+		优化insert语句
+		当进行数据的insert操作的时候，可以考虑采用以下几种优化方案。
+		如果需要同时对一张表插入很多行数据时，应该尽量使用多个值表的insert语句 这种方式将大大的缩减客户端与数据库之间的连接、关闭等消耗。
+	使得效率比分开执行的单个insert语句快。
+	示例， 原始方式为：
+		insert into xxx values(1,'Tom');
+		insert into xxx values(2,'Cat');
+		insert into xxx values(3,'Jerry');
+	优化后的方案为 ：insert into xxx values(1,'Tom'),(2,'Cat')，(3,'Jerry');
+	
+	数据有序插入
+		insert into tb_test values(4,'Tim');
+		insert into tb_test values(1,'Tom');
+		insert into tb_test values(3,'Jerry');
+		insert into tb_test values(5,'Rose');
+		insert into tb_test values(2,'Cat');
+	优化后 
+		insert into tb_test values(1,'Tom');
+		insert into tb_test values(2,'Cat');
+		insert into tb_test values(3,'Jerry');
+		insert into tb_test values(4,'Tim');
+		insert into tb_test values(5,'Rose');
+		
+	优化order by语句 
+		尽量减少额外的排序，通过索引直接返回有序数据。
+	where 条件和Order by 使用相同的索引，并且Order By 的顺序和索引顺序相同， 并且Order by 的字
+	段都是升序，或者都是降序。否则肯定需要额外的操作，这样就会出现FileSort。
+	
+	优化group by 语句
+	
+	优化嵌套查询 连接(Join)查询之所以更有效率一些 ，是因为MySQL不需要在内存中创建临时表来完成这个逻辑上需要
+两个步骤的查询工作。
+	
+	使用SQL提示
+	USE INDEX ：在查询语句中表名的后面，添加 use index 来提供希望MySQL去参考的索引列表，就可以让MySQL不再 考虑其他可用的索引
+	IGNORE INDEX： 如果用户只是单纯的想让MySQL忽略一个或者多个索引，则可以使用 ignore index 作为 hint
+	FORCE INDEX：为强制MySQL使用一个特定的索引，可在查询中使用 force index 作为hint 。
