@@ -1,0 +1,70 @@
+========基于docker搭建elk===========================
+1.安装zookeeper
+	docker run --name zookeeper -v /opt/data/zksingle:/data -p 2181:2181 -e ZOO_LOG4J_PROP="INFO,ROLLINGFILE" -d zookeeper:3.4.13
+2.安装kafka
+	docker run -d --name kafka \
+	 -p 9103:9092 \
+	 --link zookeeper:zookeeper \
+	 --env KAFKA_BROKER_ID=100 \
+	 -env HOST_IP=192.168.233.130 \
+	 --env KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 \
+	 --env KAFKA_ADVERTISED_HOST_NAME=192.168.233.130 \
+	 --env KAFKA_ADVERTISED_PORT=9103 \
+	 --restart=always \
+	 --volume /etc/localtime:/etc/localtime \
+	 wurstmeister/kafka:2.12-2.2.2
+    验证kafka是否安装成功
+	./kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic demo --from-beginning
+	./kafka-console-producer.sh --broker-list localhost:9092 --topic demo
+
+3.安装km
+	编写dockerfile
+		FROM daocloud.io/library/java:openjdk-8u40-jdk
+		ADD kafka-manager-2.0.0.2/ /opt/km2002/
+		CMD ["/opt/km2002/bin/kafka-manager","-Dconfig.file=/opt/km2002/conf/application.conf"]
+	打包镜像
+		docker build -it km:2002 . 
+	运行容器
+		docker run --link zookeeper:zookeeper -d --name km -p 9104:9000 km:2002
+	访问 http://192.168.233.130:9104/
+
+4.安装elk
+	编写dockerfile
+		FROM docker.io/sebp/elk:793
+		ADD ik/ /opt/elasticsearch/plugins/ik/
+		RUN chown -R elasticsearch:elasticsearch /opt/elasticsearch/plugins/ik/
+	打包镜像
+		docker build -t elk:793 .
+	运行容器 创建 /opt/app/elk/docker/elk/logstash目录，vi kafka.conf
+		
+		input {
+		  kafka {
+		    bootstrap_servers => ["192.168.233.130:9103"]
+		    group_id => "logstash"
+		    topics => ["mylog"]
+		    add_field => {"channel" => "kafka"}
+		    codec => json {
+			charset => "UTF-8"
+		    }
+		  }
+		}
+
+		filter {
+
+		}
+		output {
+		  elasticsearch {
+		    hosts => "localhost:9200"
+		    index => "mylog"
+		  }
+		  stdout {
+		  }
+
+		}
+	docker run -d -v /opt/app/elk/docker/elk/logstash:/etc/logstash/conf.d -p 9102:5601 -p 9200:9200 -p 9300:9300 -e ES_MIN_MEM=128m -e ES_MAX_MEM=1024m -it --name elk elk:793
+
+5.测试Eelastic查看分词
+	curl http://localhost:9200/_analyze -X POST -H 'ContentType:application/json' -d '{"text":"test elasticsearch 测试分词效果","analyzer": "ik_smart"}'
+
+6.访问kibana http://192.168.233.130:9102/ 建立mylog索引 
+	./kafka-console-producer.sh --broker-list localhost:9092 --topic mylog 发送消息验证。
