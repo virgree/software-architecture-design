@@ -1,0 +1,110 @@
+================k8s安装前环境准备===================================
+
+1.设置主机名
+	hostnamectl set-hostname czbk-master
+	vi /etc/hosts
+		192.168.233.128 chen-master
+2.关闭防火墙
+	systemctl stop firewalld systemctl disable firewalld
+3.关闭selinx
+	setenforce 0
+	sed -i "s/^SELINUX=enforcing/SELINUX=disabled/g" /etc/sysconfig/selinux
+	sed -i "s/^SELINUX=enforcing/SELINUX=disabled/g" /etc/selinux/config
+	sed -i "s/^SELINUX=permissive/SELINUX=disabled/g" /etc/sysconfig/selinux
+	sed -i "s/^SELINUX=permissive/SELINUX=disabled/g" /etc/selinux/config
+4.关闭swap
+	swapoff -a 
+	cp -p /etc/fstab /etc/fstab.bak$(date '+%Y%m%d%H%M%S')
+	sed -i "s/\/dev\/mapper\/centos-swap/\#\/dev\/mapper\/centos-swap/g" /etc/fstab
+	mount -a
+	cat /proc/swaps
+
+4.调整内核参数，开启网桥转发
+	vi /etc/sysctl.conf
+	net.bridge.bridge-nf-call-iptables=1
+	net.bridge.bridge-nf-call-ip6tables=1
+
+================安装docker和k8s===================================
+docker版本要与k8s要对应，否则安装不成功
+我的版本：
+	3:19.03.10-3.el7
+1.安装依赖：
+	sudo yum install -y yum-utils device-mapper-persistent-data lvm2
+2.安装docker 也可以添加aliyun的源
+	yum install -y http://ftp.sjtu.edu.cn/sites/docker-ce/linux/centos/7/x86_64/edge/Packages/docker-ce-19.03.10-3.el7.x86_64.rpm
+3.安装containerd
+	yum -y install http://ftp.sjtu.edu.cn/sites/docker-ce/linux/centos/7/x86_64/edge/Packages/containerd.io-1.2.6-3.3.el7.x86_64.rpm
+
+4.安装kubectl、kubelet、kubeadm
+	添加阿里源
+		cat<<EOF>/etc/yum.repos.d/kubernetes.repo
+		[kubernetes]
+		name=Kubernetes
+		baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64 
+		enabled=1
+		gpgcheck=0 EOF
+	清理缓存
+		yum -y install epel-release yum clean all yum makecache
+	安装kubelet 1.18.2 、kubectl 1.18.2、kubeadm 1.18.2
+		yum -y install kubectl-1.18.2 kubelet-1.18.2 kubeadm-1.18.2
+	启动服务
+		systemctl enable docker && systemctl start docker
+		systemctl enable kubelet && systemctl start kubelet
+	初始化
+		kubeadm init --kubernetes-version=v1.18.2 --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.233.128 --image-repository registry.aliyuncs.com/google_containers
+		初始化成功后执行
+			mkdir -p $HOME/.kube
+			sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+			sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+	安装部署flanel 
+		下载（被墙，在k8sconf目录下）：kube-flannel.yml
+		kubectl apply -f kube-flannel.yml
+
+	部署单机版，k8s默认Master Node不参与工作负载，所以需要设置
+		kubectl describe node -A | grep Taints
+		kubectl taint nodes --all node-role.kubernetes.io/master-
+
+=================================================安装dashboard==================================
+1.更换中科大docker源
+		{
+			"registry-mirrors": ["https://docker.mirrors.ustc.edu.cn"]
+		}
+2.使用docker下载dashboard镜像
+	docker pull kubernetesui/dashboard:v2.0.1
+3.建立目录存放部署文件
+	mkdir /usr/k8s
+	下载kubernetes-dashboard.yaml，修改nodePort: 31443 才能被访问
+	kubectl create -f kubernetes-dashboard.yaml
+	kubectl apply -f dashboard-adminuser.yam
+	dashboard-ClusterRoleBinding.yaml
+
+
+	查看kube-system命名空间下的token
+		kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')
+4.访问登录-用token登录
+	192.168.233.128:31443
+
+其他...
+
+卸载dokcer
+	yum remove docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-selinux docker-engine-selinux docker-engine docer-io
+	rm -rf /etc/systemd/system/docker.service.d 
+	rm -rf /var/lib/docker
+	rm -rf /var/run/docker
+
+
+查看pod日志和启动状态
+ kubectl get pods --all-namespaces
+ kubectl get pods --namespace=kubernetes-dashboard -o wide
+ kubectl describe po -n kubernetes-dashboard kubernetes-dashboard-7bfbb48676-bpzwg
+ iptables -L -n --line-numbers | grep dashboard
+
+ kubectl logs -f -n kubernetes-dashboard kubernetes-dashboard-7bfbb48676-bpzwg
+ kubectl logs -f dashboard-metrics-scraper-6b4884c9d5-4s4n8 --namespace=kube-system
+ 
+ kubectl get svc kubernetes-dashboard -n kube-system
+ kubectl get svc 
+
+
+

@@ -1,0 +1,5 @@
+
+
+安装docker依赖containerd.io 最新的docker依赖 >= 1.2.2-3 以上的containerd.io，需要首先安装containerd.io，否则会报错
+安装containerd
+yum -y install http://ftp.sjtu.edu.cn/sites/docker-ce/linux/centos/7/x86_64/edge/Packages/containerd.io-1.2.6-3.3.el7.x86_64.rpm
